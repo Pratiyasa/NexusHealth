@@ -1,0 +1,20 @@
+@import "tailwindcss";
+.emergency {
+    background-color: #1a0000 !important;
+    border: 5px solid #ff0000;
+    transition: all 0.5s ease-in-out;
+}
+
+/* Style for the Neural Heatmap Grid */
+.heatmap-container {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 2px;
+    width: 200px;
+}
+
+.pixel {
+    width: 20px;
+    height: 20px;
+    border-radius: 2px;
+}
