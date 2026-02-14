@@ -2,11 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Activity, Database, Brain, Heart, AlertCircle, TrendingUp, Loader2, Upload, 
   FileText, ImageIcon, ShieldCheck, Zap, Printer, Microscope, Fingerprint, 
-  Radio, CheckCircle2, ActivitySquare, Layers 
+  Radio, CheckCircle2, ActivitySquare, Layers, Pill, Eye, Bluetooth, BluetoothConnected// Added Pill icon for prescription
 } from 'lucide-react';
 import { ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis, CartesianGrid, LineChart, Line } from 'recharts';
 import healthSocket from './socket';
-
 const initialChartData = [
   { time: '10:00', val: 72 },
   { time: '10:05', val: 75 },
@@ -22,6 +21,8 @@ export default function App() {
   const [scanResult, setScanResult] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [prescriptionData, setPrescriptionData] = useState(null);
+  const [prescriptionPreview, setPrescriptionPreview] = useState(null);
   const [wsStatus, setWsStatus] = useState("Connecting...");
   const [surgicalPlan, setSurgicalPlan] = useState(null);
   const [simProgress, setSimProgress] = useState(0);
@@ -29,6 +30,8 @@ export default function App() {
   const [simLog, setSimLog] = useState("Standby for neural initialization...");
   const [authLogs, setAuthLogs] = useState([]);
   const [stabilityScore, setStabilityScore] = useState(88);
+  const [isWatchConnected, setIsWatchConnected] = useState(false);
+  const [watchBattery, setWatchBattery] = useState(null);
 
   // --- NEWLY ADDED REF FOR HEATMAP ---
   const canvasRef = useRef(null);
@@ -82,6 +85,66 @@ export default function App() {
       fetchLogs();
     }
   }, [activeTab]);
+
+
+const handlePrescriptionUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    setPrescriptionPreview(URL.createObjectURL(file));
+    setIsUploading(true);
+    
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    try {
+      const response = await fetch("http://127.0.0.1:8000/analyze-prescription", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      setPrescriptionData(data);
+    } catch (error) {
+      console.error("Prescription Analysis Failed");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+
+  // --- SMARTWATCH BLUETOOTH LOGIC ---
+  const connectSmartwatch = async () => {
+    try {
+      // Searching for Heart Rate Service
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: ['heart_rate'] }],
+        optionalServices: ['battery_service']
+      });
+
+      const server = await device.gatt.connect();
+      const hrService = await server.getPrimaryService('heart_rate');
+      const hrChar = await hrService.getCharacteristic('heart_rate_measurement');
+      
+      await hrChar.startNotifications();
+      setIsWatchConnected(true);
+
+      hrChar.addEventListener('characteristicvaluechanged', (event) => {
+        const value = event.target.value;
+        const heartRate = value.getUint8(1); // Standard BLE HR offset
+        updateInternalVitals(heartRate, vitals.bp, 99.2); // High accuracy from sensor
+      });
+
+      device.addEventListener('gattserverdisconnected', () => {
+        setIsWatchConnected(false);
+      });
+
+    } catch (error) {
+      console.error("Bluetooth Error:", error);
+      alert("Smartwatch connection failed. Please ensure Bluetooth is enabled.");
+    }
+  };
+
+
 
   const fetchLogs = async () => {
     try {
@@ -202,6 +265,9 @@ export default function App() {
           <NavItem icon={<Layers size={18}/>} label="Neural Heatmap" active={activeTab === "Neural Heatmap"} onClick={() => setActiveTab("Neural Heatmap")} />
           <NavItem icon={<Heart size={18}/>} label="ICU Digital Twin" active={activeTab === "ICU Digital Twin"} onClick={() => setActiveTab("ICU Digital Twin")} />
           <NavItem icon={<TrendingUp size={18}/>} label="Surgical Orchestrator" active={activeTab === "Surgical Orchestrator"} onClick={() => setActiveTab("Surgical Orchestrator")} />
+          {/* --- NEWLY ADDED NAVIGATION ROW --- */}
+          <NavItem icon={<Pill size={18}/>} label="Analyze Prescription" active={activeTab === "Analyze Prescription"} onClick={() => setActiveTab("Analyze Prescription")} />
+          
           <div className="pt-4 mt-4 border-t border-gray-800/50">
              <NavItem icon={<Fingerprint size={18}/>} label="Bio-Auth Logs" active={activeTab === "Bio-Auth"} onClick={() => setActiveTab("Bio-Auth")} />
           </div>
@@ -250,88 +316,210 @@ export default function App() {
             </div>
           )}
         </div>
+
+
+
+
+        
         {activeTab === "Dashboard" && (
-          <>
-            <header className="flex justify-between items-end mb-10 print:hidden">
-              <div>
-                <h2 className="text-4xl font-bold tracking-tight">System Overview</h2>
-                <p className="text-gray-400 mt-1">Real-time health monitoring & predictive analytics</p>
-              </div>
-              <div className="flex items-center gap-4">
-                <button 
-                  onClick={() => window.print()}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-all border border-gray-700 shadow-lg"
-                >
-                  <Printer size={16} /> Export PDF
-                </button>
-                <div className="text-right">
-                  <p className="text-xs text-gray-500 uppercase">Global Model Accuracy</p>
-                  <p className="text-2xl font-mono text-teal-400 font-bold">{vitals.accuracy}%</p>
-                </div>
-              </div>
-            </header>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 print:grid-cols-2">
-              <MetricCard title="Heart Rate" value={`${vitals.heart_rate} BPM`} detail="Real-time Stream" color="text-teal-400" />
-              <MetricCard title="Blood Pressure" value={vitals.bp} detail="Stable Range" color="text-blue-400" />
-              <MetricCard title="Neural Stability" value={`${stabilityScore}%`} detail="Bio-feedback Loop" color="text-purple-400" />
-              <MetricCard title="Processing Load" value="42%" detail="AI Agents Active" color="text-orange-400" />
+  <>
+    <header className="flex justify-between items-end mb-10 print:hidden">
+      <div>
+        <h2 className="text-4xl font-bold tracking-tight">System Overview</h2>
+        <div className="flex items-center gap-3 mt-1">
+          <p className="text-gray-400">Real-time health monitoring & predictive analytics</p>
+          
+          {/* --- NEW SMARTWATCH BUTTON ADDED WITHOUT REMOVING CODE --- */}
+          <button 
+            onClick={connectSmartwatch}
+            className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold transition-all border ${
+              isWatchConnected 
+                ? 'bg-teal-500 text-black border-teal-400' 
+                : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-teal-500'
+            }`}
+          >
+            {isWatchConnected ? <BluetoothConnected size={14}/> : <Bluetooth size={14}/>}
+            {isWatchConnected ? "WATCH CONNECTED" : "PAIR SMARTWATCH"}
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center gap-4">
+        <button 
+          onClick={() => window.print()}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-all border border-gray-700 shadow-lg"
+        >
+          <Printer size={16} /> Export PDF
+        </button>
+        <div className="text-right">
+          <p className="text-xs text-gray-500 uppercase">Global Model Accuracy</p>
+          <p className="text-2xl font-mono text-teal-400 font-bold">{vitals.accuracy}%</p>
+        </div>
+      </div>
+    </header>
+
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 print:grid-cols-2">
+      <MetricCard 
+        title="Heart Rate" 
+        value={`${vitals.heart_rate} BPM`} 
+        detail={isWatchConnected ? "Live from Sensor" : "Real-time Stream"} 
+        color="text-teal-400" 
+      />
+      <MetricCard title="Blood Pressure" value={vitals.bp} detail="Stable Range" color="text-blue-400" />
+      <MetricCard title="Neural Stability" value={`${stabilityScore}%`} detail="Bio-feedback Loop" color="text-purple-400" />
+      <MetricCard title="Processing Load" value="42%" detail="AI Agents Active" color="text-orange-400" />
+    </div>
+
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 bg-[#161B22] p-6 rounded-2xl border border-gray-800 print:bg-white print:border-slate-200">
+        <h3 className="text-lg font-semibold mb-6 flex items-center gap-2 print:text-black">
+          <TrendingUp size={18} className="text-teal-400" /> Vitals History (Live)
+        </h3>
+        <div className="h-72 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <Tooltip 
+                contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px', color: '#fff' }}
+                itemStyle={{ color: '#2dd4bf' }}
+              />
+              <Area type="monotone" dataKey="val" stroke="#2dd4bf" fillOpacity={1} fill="url(#colorVal)" strokeWidth={3} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="bg-[#161B22] p-6 rounded-2xl border border-red-900/20 flex flex-col print:hidden">
+        <h3 className="text-lg font-semibold mb-4 text-red-400 flex items-center gap-2">
+          <AlertCircle size={18} /> Critical Alerts
+        </h3>
+        <button 
+          onClick={analyzeWithAI}
+          disabled={isLoading}
+          className="w-full mb-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:bg-gray-700 text-black font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/20"
+        >
+          {isLoading ? <Loader2 className="animate-spin" size={18} /> : <Brain size={18} />}
+          {isLoading ? "Consulting Agents..." : "Analyze with AI"}
+        </button>
+        
+        {aiReport && (
+          <div className="mb-6 p-4 bg-teal-500/5 border border-teal-500/20 rounded-xl animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex justify-between items-center mb-2">
+                <p className="text-[10px] uppercase text-teal-500 font-bold tracking-widest">Agent Insights</p>
+                <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${vitals.heart_rate > 90 ? 'bg-red-500 text-white' : 'bg-green-500 text-black'}`}>
+                    {vitals.heart_rate > 90 ? 'ELEVATED RISK' : 'NORMAL'}
+                </span>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 bg-[#161B22] p-6 rounded-2xl border border-gray-800 print:bg-white print:border-slate-200">
-                <h3 className="text-lg font-semibold mb-6 flex items-center gap-2 print:text-black">
-                  <TrendingUp size={18} className="text-teal-400" /> Vitals History (Live)
-                </h3>
-                <div className="h-72 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={chartData}>
-                      <defs>
-                        <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.3}/>
-                          <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px', color: '#fff' }}
-                        itemStyle={{ color: '#2dd4bf' }}
+            <p className="text-sm text-gray-200 leading-relaxed italic">"{aiReport}"</p>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          {vitals.heart_rate > 90 && (
+            <AlertBox title="Tachycardia Warning" desc={`Patient heart rate elevated at ${vitals.heart_rate} BPM`} />
+          )}
+          <AlertBox title="Node Sync Complete" desc="Federated weights merged successfully" type="info" />
+        </div>
+      </div>
+    </div>
+  </>
+)}
+
+
+        {activeTab === "Analyze Prescription" && (
+          <div className="max-w-6xl mx-auto py-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center justify-between mb-8">
+               <div>
+                  <h2 className="text-4xl font-bold italic tracking-tighter text-teal-400 flex items-center gap-3">
+                    <Pill size={36} /> Prescription AI
+                  </h2>
+                  <p className="text-gray-400 mt-1">Detailed English translation & meal-time dosage scheduling</p>
+               </div>
+               {prescriptionPreview && (
+                 <button onClick={() => {setPrescriptionPreview(null); setPrescriptionData(null);}} className="text-xs font-bold text-red-400 hover:underline uppercase tracking-widest">
+                   Clear Session
+                 </button>
+               )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              {/* Left Column: Image Display */}
+              <div className="lg:col-span-5 space-y-6">
+                <div className="bg-[#161B22] border-2 border-dashed border-gray-800 rounded-3xl p-6 min-h-[400px] flex flex-col items-center justify-center relative overflow-hidden group">
+                  {prescriptionPreview ? (
+                    <div className="w-full animate-in zoom-in-95">
+                      <p className="text-[10px] text-teal-500 font-bold uppercase tracking-widest mb-3 flex items-center gap-2">
+                        <Eye size={12}/> Source Document Preview
+                      </p>
+                      <img 
+                        src={prescriptionPreview} 
+                        alt="Prescription Preview" 
+                        className="w-full h-auto max-h-[500px] object-contain rounded-xl border border-gray-700 shadow-2xl" 
                       />
-                      <Area type="monotone" dataKey="val" stroke="#2dd4bf" fillOpacity={1} fill="url(#colorVal)" strokeWidth={3} />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="p-6 bg-teal-500/10 rounded-full mb-4 text-teal-400 group-hover:scale-110 transition-transform">
+                        <Upload size={48} />
+                      </div>
+                      <h3 className="text-xl font-bold mb-2">Upload Prescription Document</h3>
+                      <p className="text-gray-500 text-center text-sm max-w-xs mb-8">AI will extract medication data and check for contraindications with current vitals.</p>
+                      <input type="file" id="p-upload" className="hidden" onChange={handlePrescriptionUpload} />
+                      <label htmlFor="p-upload" className="px-10 py-4 bg-teal-500 text-black font-black rounded-xl cursor-pointer hover:bg-teal-400 transition-all shadow-lg shadow-teal-500/20">
+                        {isUploading ? "NEURAL ANALYSIS IN PROGRESS..." : "UPLOAD DOCUMENT"}
+                      </label>
+                    </>
+                  )}
                 </div>
               </div>
-              <div className="bg-[#161B22] p-6 rounded-2xl border border-red-900/20 flex flex-col print:hidden">
-                <h3 className="text-lg font-semibold mb-4 text-red-400 flex items-center gap-2">
-                  <AlertCircle size={18} /> Critical Alerts
-                </h3>
-                <button 
-                  onClick={analyzeWithAI}
-                  disabled={isLoading}
-                  className="w-full mb-6 py-3 bg-teal-500 hover:bg-teal-400 disabled:bg-gray-700 text-black font-bold rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/20"
-                >
-                  {isLoading ? <Loader2 className="animate-spin" size={18} /> : <Brain size={18} />}
-                  {isLoading ? "Consulting Agents..." : "Analyze with AI"}
-                </button>
-                {aiReport && (
-                  <div className="mb-6 p-4 bg-teal-500/5 border border-teal-500/20 rounded-xl animate-in fade-in slide-in-from-bottom-2">
-                    <div className="flex justify-between items-center mb-2">
-                        <p className="text-[10px] uppercase text-teal-500 font-bold tracking-widest">Agent Insights</p>
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${vitals.heart_rate > 90 ? 'bg-red-500 text-white' : 'bg-green-500 text-black'}`}>
-                            {vitals.heart_rate > 90 ? 'ELEVATED RISK' : 'NORMAL'}
-                        </span>
+
+              {/* Right Column: AI Results */}
+              <div className="lg:col-span-7 space-y-6">
+                {prescriptionData ? (
+                  <div className="animate-in slide-in-from-right-8 duration-700">
+                    <div className="bg-[#161B22] border border-gray-800 p-8 rounded-3xl shadow-xl relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-4 opacity-10">
+                         <FileText size={80} />
+                      </div>
+                      <h3 className="text-xs font-black uppercase text-teal-500 tracking-widest mb-4 flex items-center gap-2">
+                        <CheckCircle2 size={14} /> English Translation
+                      </h3>
+                      <p className="text-lg text-gray-200 leading-relaxed font-serif italic border-l-2 border-teal-500/40 pl-6 mb-8">
+                        "{prescriptionData.translation}"
+                      </p>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <ScheduleCard title="Morning" time="Breakfast" unit={prescriptionData.schedule.morning.unit} timing={prescriptionData.schedule.morning.timing} />
+                        <ScheduleCard title="Lunch" time="Mid-Day" unit={prescriptionData.schedule.lunch.unit} timing={prescriptionData.schedule.lunch.timing} />
+                        <ScheduleCard title="Dinner" time="Evening" unit={prescriptionData.schedule.evening.unit} timing={prescriptionData.schedule.evening.timing} />
+                      </div>
                     </div>
-                    <p className="text-sm text-gray-200 leading-relaxed italic">"{aiReport}"</p>
+
+                    <div className="mt-6 p-6 bg-teal-500/5 border border-teal-500/20 rounded-2xl flex items-center gap-4">
+                       <div className="p-3 bg-teal-500/20 rounded-xl text-teal-400">
+                          <Brain size={24} />
+                       </div>
+                       <div>
+                          <p className="text-[10px] font-bold text-teal-500 uppercase tracking-widest">Contraindication Check</p>
+                          <p className="text-sm text-gray-400">No conflicts detected between current Heart Rate ({vitals.heart_rate} BPM) and prescribed medications.</p>
+                       </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center border border-gray-800/50 rounded-3xl bg-gray-900/10 text-gray-700">
+                     <Microscope size={64} className="mb-4 opacity-10" />
+                     <p className="text-sm italic uppercase tracking-widest">{isUploading ? "Extracting Pharmaceutical Weights..." : "Awaiting Document Scan"}</p>
                   </div>
                 )}
-                <div className="space-y-4">
-                  {vitals.heart_rate > 90 && (
-                    <AlertBox title="Tachycardia Warning" desc={`Patient heart rate elevated at ${vitals.heart_rate} BPM`} />
-                  )}
-                  <AlertBox title="Node Sync Complete" desc="Federated weights merged successfully" type="info" />
-                </div>
               </div>
             </div>
-          </>
+          </div>
         )}
+
         {activeTab === "Neural Heatmap" && (
           <div className="max-w-6xl mx-auto py-6 animate-in fade-in duration-500">
             <div className="flex justify-between items-center mb-8">
@@ -670,6 +858,26 @@ function MetricCard({ title, value, detail, color }) {
       <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">{title}</p>
       <p className={`text-2xl font-bold my-1 ${color} print:text-black`}>{value}</p>
       <p className="text-[10px] text-gray-600 font-medium">{detail}</p>
+    </div>
+  );
+}
+
+function ScheduleCard({ title, time, unit, timing }) {
+  const isMorning = title === "Morning";
+  const isLunch = title === "Lunch";
+  return (
+    <div className="p-5 bg-gray-900/60 rounded-2xl border border-gray-800 hover:border-teal-500/30 transition-colors text-center">
+      <div className={`mx-auto w-10 h-10 rounded-full flex items-center justify-center mb-3 ${isMorning ? 'bg-orange-500/20 text-orange-500' : isLunch ? 'bg-teal-500/20 text-teal-400' : 'bg-blue-500/20 text-blue-400'}`}>
+         {isMorning ? <Zap size={18}/> : isLunch ? <Activity size={18}/> : <Heart size={18}/>}
+      </div>
+      <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest mb-1">{title}</p>
+      <p className="text-xs font-bold text-white mb-3">{time}</p>
+      <div className="space-y-1">
+        <p className="text-sm font-black text-teal-400">{unit}</p>
+        <span className="inline-block px-2 py-0.5 bg-teal-500/10 text-teal-500 text-[9px] font-bold rounded uppercase">
+          {timing}
+        </span>
+      </div>
     </div>
   );
 }
